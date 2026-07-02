@@ -1,0 +1,6 @@
+{
+  "name": "Painel de Anúncios Android",
+  "description": "Painel administrativo estático integrado com Firebase Firestore para gerenciar e cadastrar anúncios em tempo real, ideal para hospedagem gratuita no GitHub Pages.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
