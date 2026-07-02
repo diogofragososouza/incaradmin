@@ -1,6 +1,6 @@
 import { useState, useEffect, FormEvent } from "react";
 import { FirebaseConfig } from "../types";
-import { Settings, Save, Wifi, WifiOff, HelpCircle, Check, Loader2 } from "lucide-react";
+import { Settings, Save, Wifi, WifiOff, HelpCircle, Check, Loader2, Sparkles } from "lucide-react";
 
 interface ConfigPanelProps {
   config: FirebaseConfig | null;
@@ -17,7 +17,33 @@ export default function ConfigPanel({ config, onSaveConfig, isFirebaseActive, co
   const [storageBucket, setStorageBucket] = useState("");
   const [messagingSenderId, setMessagingSenderId] = useState("");
   const [appId, setAppId] = useState("");
+  const [rawConfigPaste, setRawConfigPaste] = useState("");
   const [saveSuccess, setSaveSuccess] = useState(false);
+
+  // Limpa as aspas e caracteres indesejados ao salvar/ler credenciais
+  const cleanValue = (val: string): string => {
+    let cleaned = val.trim();
+    // Remove aspas no início/fim
+    if (
+      (cleaned.startsWith('"') && cleaned.endsWith('"')) ||
+      (cleaned.startsWith("'") && cleaned.endsWith("'")) ||
+      (cleaned.startsWith("`") && cleaned.endsWith("`"))
+    ) {
+      cleaned = cleaned.slice(1, -1).trim();
+    }
+    // Remove vírgulas ou ponto-e-vírgula no fim (comum ao copiar de objeto JS)
+    if (cleaned.endsWith(",") || cleaned.endsWith(";")) {
+      cleaned = cleaned.slice(0, -1).trim();
+    }
+    // Segunda passagem de aspas caso tivessem ficado ocultas
+    if (
+      (cleaned.startsWith('"') && cleaned.endsWith('"')) ||
+      (cleaned.startsWith("'") && cleaned.endsWith("'"))
+    ) {
+      cleaned = cleaned.slice(1, -1).trim();
+    }
+    return cleaned;
+  };
 
   // Carregar os valores de configuração quando o componente for montado ou alterado externamente
   useEffect(() => {
@@ -31,20 +57,62 @@ export default function ConfigPanel({ config, onSaveConfig, isFirebaseActive, co
     }
   }, [config]);
 
+  // Função para processar o bloco de texto colado e preencher os campos automaticamente
+  const handleQuickPasteChange = (text: string) => {
+    setRawConfigPaste(text);
+    if (!text.trim()) return;
+
+    // Regex para buscar o par de chave-valor (ex: apiKey: "valor", "apiKey": 'valor')
+    const extract = (key: string): string => {
+      const regex = new RegExp(`['"]?${key}['"]?\\s*:\\s*['"\`]([^'"\`]+)['"\`]`, "i");
+      const match = text.match(regex);
+      if (match && match[1]) {
+        return match[1].trim();
+      }
+      return "";
+    };
+
+    const extApiKey = extract("apiKey");
+    const extAuthDomain = extract("authDomain");
+    const extProjectId = extract("projectId");
+    const extStorageBucket = extract("storageBucket");
+    const extMessagingSenderId = extract("messagingSenderId");
+    const extAppId = extract("appId");
+
+    let filledSomething = false;
+    if (extApiKey) { setApiKey(extApiKey); filledSomething = true; }
+    if (extAuthDomain) { setAuthDomain(extAuthDomain); filledSomething = true; }
+    if (extProjectId) { setProjectId(extProjectId); filledSomething = true; }
+    if (extStorageBucket) { setStorageBucket(extStorageBucket); filledSomething = true; }
+    if (extMessagingSenderId) { setMessagingSenderId(extMessagingSenderId); filledSomething = true; }
+    if (extAppId) { setAppId(extAppId); filledSomething = true; }
+
+    if (filledSomething) {
+      // Pequeno feedback de autofill
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 2000);
+    }
+  };
+
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
-    if (!apiKey || !projectId || !appId) {
+    
+    const cleanedApiKey = cleanValue(apiKey);
+    const cleanedProjectId = cleanValue(projectId);
+    const cleanedAppId = cleanValue(appId);
+
+    if (!cleanedApiKey || !cleanedProjectId || !cleanedAppId) {
       alert("Por favor, preencha os campos obrigatórios (API Key, Project ID e App ID) para conectar.");
       return;
     }
 
     const newConfig: FirebaseConfig = {
-      apiKey: apiKey.trim(),
-      authDomain: authDomain.trim(),
-      projectId: projectId.trim(),
-      storageBucket: storageBucket.trim(),
-      messagingSenderId: messagingSenderId.trim(),
-      appId: appId.trim()
+      apiKey: cleanedApiKey,
+      authDomain: cleanValue(authDomain),
+      projectId: cleanedProjectId,
+      storageBucket: cleanValue(storageBucket),
+      messagingSenderId: cleanValue(messagingSenderId),
+      appId: cleanedAppId
     };
 
     onSaveConfig(newConfig);
@@ -111,6 +179,29 @@ export default function ConfigPanel({ config, onSaveConfig, isFirebaseActive, co
 
       {isOpen && (
         <form onSubmit={handleSubmit} className="mt-5 space-y-4 pt-4 border-t border-slate-800">
+          {/* Quick Paste Block */}
+          <div className="bg-slate-950 p-4 rounded-xl border border-indigo-950/40">
+            <label className="block text-xs font-semibold text-indigo-300 mb-1 flex items-center gap-1">
+              <Sparkles className="animate-pulse text-indigo-400" size={13} />
+              Preenchimento Automático Rápido (Recomendado)
+            </label>
+            <p className="text-[10px] text-slate-500 mb-2 leading-tight">
+              Cole o objeto <code className="text-indigo-400 bg-indigo-950/30 px-1 py-0.5 rounded">const firebaseConfig = &#123;...&#125;</code> completo do seu painel Firebase para autocompletar os campos sem erros.
+            </p>
+            <textarea
+              value={rawConfigPaste}
+              onChange={(e) => handleQuickPasteChange(e.target.value)}
+              placeholder="Cole aqui o seu código do Firebase Console contendo apiKey, authDomain, projectId, etc..."
+              rows={3}
+              className="w-full rounded-xl bg-[#090d16] border border-slate-800 focus:border-indigo-500 p-2 text-xs text-slate-300 focus:outline-none transition-all placeholder:text-slate-600 font-mono resize-none"
+            />
+            {rawConfigPaste && (
+              <div className="mt-1.5 text-[10px] text-emerald-400 font-medium">
+                ✨ Processado e limpo! Verifique os valores gerados nos campos individuais abaixo.
+              </div>
+            )}
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-semibold text-slate-400 mb-1">
