@@ -1,11 +1,12 @@
 export interface Ad {
-  id?: string; // ID gerado pelo Firestore ou gerado localmente no modo demo
+  id?: string;
   title: string;
   imageUrl: string;
   videoUrl: string;
   isVideo: boolean;
   durationMillis: number;
-  createdAt?: any; // Timestamp do Firestore ou número epoch
+  description?: string; // Descrição opcional das campanhas
+  createdAt?: any;
 }
 
 export interface FirebaseConfig {

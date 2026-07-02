@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef, FormEvent } from "react";
 import { Ad, FirebaseConfig } from "./types";
-import { INITIAL_DEMO_ADS, QUICK_PROMPTS } from "./data";
+import { INITIAL_DEMO_ADS } from "./data";
 import { initializeFirebase } from "./lib/firebase";
 import AdCard from "./components/AdCard";
 import ConfigPanel from "./components/ConfigPanel";
 import MetricCard from "./components/MetricCard";
+import LoginScreen from "./components/LoginScreen";
 import { 
   Plus, 
   Trash2, 
@@ -19,7 +20,8 @@ import {
   Clock, 
   FolderOpen,
   MonitorPlay,
-  Settings
+  Settings,
+  LogOut
 } from "lucide-react";
 import { 
   collection, 
@@ -34,6 +36,11 @@ import {
   writeBatch,
   serverTimestamp
 } from "firebase/firestore";
+import { 
+  signInWithEmailAndPassword, 
+  signOut, 
+  onAuthStateChanged 
+} from "firebase/auth";
 
 export default function App() {
   // Configuração e Conexão Firebase
@@ -41,6 +48,12 @@ export default function App() {
   const [firebaseActive, setFirebaseActive] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const firestoreDbRef = useRef<any>(null);
+
+  // Autenticação
+  const [user, setUser] = useState<any | null>(null);
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const firebaseAuthRef = useRef<any>(null);
 
   // Lista de Anúncios e Filtros
   const [ads, setAds] = useState<Ad[]>([]);
@@ -52,6 +65,7 @@ export default function App() {
   const [formTitle, setFormTitle] = useState("");
   const [formImageUrl, setFormImageUrl] = useState("");
   const [formVideoUrl, setFormVideoUrl] = useState("");
+  const [formDescription, setFormDescription] = useState("");
   const [formIsVideo, setFormIsVideo] = useState(false);
   const [formDurationSec, setFormDurationSec] = useState(10); // exibido em segundos, convertido para millis no salvamento
   const [isEditing, setIsEditing] = useState(false);
@@ -63,6 +77,12 @@ export default function App() {
 
   // 1. Carregar Configuração Salva e Inicializar Modo Adequado
   useEffect(() => {
+    // Restaurar usuário demo se aplicável
+    const demoUser = localStorage.getItem("demo_admin_user");
+    if (demoUser) {
+      setUser({ email: demoUser, isDemo: true });
+    }
+
     const savedConfig = localStorage.getItem("firebase_admin_ad_config");
     if (savedConfig) {
       try {
@@ -105,24 +125,43 @@ export default function App() {
       setConfig(null);
       setConnectionError(null);
       loadDemoAds();
+      
+      // Se estava logado no firebase real, limpar sessão
+      if (user && !user.isDemo) {
+        setUser(null);
+      }
+      
       triggerNotification("success", "Desconectado do Firestore. Modo demo ativo.");
       return;
     }
 
     try {
       setConnectionError(null);
-      const { db } = initializeFirebase(newConfig);
+      const { db, auth } = initializeFirebase(newConfig);
       firestoreDbRef.current = db;
+      firebaseAuthRef.current = auth;
 
       // Guardar config no localStorage
       localStorage.setItem("firebase_admin_ad_config", JSON.stringify(newConfig));
       setConfig(newConfig);
 
-      // Ouvir atualizações em tempo real do Firestore (coleção 'ads')
-      const adsCollectionRef = collection(db, "ads");
-      const q = query(adsCollectionRef); // Ordenações podem falhar se os índices não estiverem prontos, então fazemos ordenação local
+      // Escutar estado de autenticação real do Firebase Auth
+      const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
+        if (currentUser) {
+          setUser(currentUser);
+        } else {
+          // Se não houver usuário real logado, limpa do estado se for o caso
+          if (user && !user.isDemo) {
+            setUser(null);
+          }
+        }
+      });
 
-      const unsubscribe = onSnapshot(
+      // Ouvir atualizações em tempo real do Firestore (coleção 'active_ads')
+      const adsCollectionRef = collection(db, "active_ads");
+      const q = query(adsCollectionRef);
+
+      const unsubscribeAds = onSnapshot(
         q,
         (snapshot) => {
           const fetchedAds: Ad[] = snapshot.docs.map((doc) => {
@@ -134,11 +173,12 @@ export default function App() {
               videoUrl: data.videoUrl || "",
               isVideo: !!data.isVideo,
               durationMillis: typeof data.durationMillis === "number" ? data.durationMillis : 10000,
+              description: data.description || "",
               createdAt: data.createdAt || null
             };
           });
 
-          // Ordenar localmente por ID ou título como fallback se não houver campo timestamp
+          // Ordenar localmente por ID ou título como fallback
           fetchedAds.sort((a, b) => b.title.localeCompare(a.title));
 
           setAds(fetchedAds);
@@ -148,17 +188,66 @@ export default function App() {
         (error) => {
           console.error("Erro no onSnapshot do Firestore:", error);
           setConnectionError(
-            `Erro ao conectar com a coleção 'ads': ${error.message}. Certifique-se de que a coleção existe e as regras de segurança permitem leitura pública ou anônima.`
+            `Erro ao conectar com a coleção 'active_ads': ${error.message}. Certifique-se de que a coleção existe e as regras de segurança permitem leitura/escrita.`
           );
           setFirebaseActive(false);
         }
       );
 
-      return () => unsubscribe();
+      return () => {
+        unsubscribeAuth();
+        unsubscribeAds();
+      };
     } catch (err: any) {
       console.error("Erro de inicialização do Firebase:", err);
       setConnectionError(`Falha ao inicializar o Firebase: ${err.message}`);
       setFirebaseActive(false);
+    }
+  };
+
+  // Função para lidar com o login do admin
+  const handleLogin = async (email: string, password: string) => {
+    setAuthLoading(true);
+    setAuthError(null);
+    try {
+      if (firebaseActive && firebaseAuthRef.current) {
+        // Login com Firebase real
+        await signInWithEmailAndPassword(firebaseAuthRef.current, email, password);
+        triggerNotification("success", "Login efetuado com sucesso (Firebase Real)!");
+      } else {
+        // Login de demonstração local
+        if (email === "admin@incarsads.com" && password === "admin123") {
+          setUser({ email, isDemo: true });
+          localStorage.setItem("demo_admin_user", email);
+          triggerNotification("success", "Acesso concedido como Administrador de Demonstração!");
+        } else {
+          throw new Error("E-mail ou senha incorretos para o modo demonstração. Dica: use admin@incarsads.com / admin123");
+        }
+      }
+    } catch (err: any) {
+      console.error("Erro na autenticação:", err);
+      let friendlyMessage = err.message;
+      if (err.code === "auth/invalid-credential" || err.code === "auth/user-not-found" || err.code === "auth/wrong-password") {
+        friendlyMessage = "E-mail ou senha incorretos. Certifique-se de ter cadastrado este usuário no console do Firebase.";
+      }
+      setAuthError(friendlyMessage);
+      triggerNotification("error", friendlyMessage);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      if (firebaseActive && firebaseAuthRef.current) {
+        await signOut(firebaseAuthRef.current);
+      }
+      setUser(null);
+      localStorage.removeItem("demo_admin_user");
+      triggerNotification("success", "Sessão encerrada com sucesso.");
+    } catch (err: any) {
+      console.error("Erro no logout:", err);
+      triggerNotification("error", `Erro ao sair: ${err.message}`);
     }
   };
 
@@ -191,14 +280,15 @@ export default function App() {
       videoUrl: formIsVideo ? formVideoUrl.trim() : "",
       isVideo: formIsVideo,
       durationMillis: durationMillis,
+      description: formDescription.trim(),
     };
 
     try {
       if (firebaseActive && firestoreDbRef.current) {
-        // Operação Real no Firestore
-        const adsCol = collection(firestoreDbRef.current, "ads");
+        // Operação Real no Firestore na coleção 'active_ads'
+        const adsCol = collection(firestoreDbRef.current, "active_ads");
         if (isEditing && formId) {
-          const adDocRef = doc(firestoreDbRef.current, "ads", formId);
+          const adDocRef = doc(firestoreDbRef.current, "active_ads", formId);
           await updateDoc(adDocRef, adData);
           triggerNotification("success", "Anúncio atualizado com sucesso no Firestore!");
         } else {
@@ -213,7 +303,7 @@ export default function App() {
         let updatedList = [...ads];
         if (isEditing && formId) {
           updatedList = updatedList.map((item) => 
-            item.id === formId ? { ...item, ...adData } : item
+          item.id === formId ? { ...item, ...adData } : item
           );
           triggerNotification("success", "Anúncio atualizado localmente (Modo Demo).");
         } else {
@@ -243,6 +333,7 @@ export default function App() {
     setFormTitle(ad.title);
     setFormImageUrl(ad.imageUrl);
     setFormVideoUrl(ad.videoUrl || "");
+    setFormDescription(ad.description || "");
     setFormIsVideo(ad.isVideo);
     setFormDurationSec(ad.durationMillis / 1000);
     setIsEditing(true);
@@ -260,6 +351,7 @@ export default function App() {
     setFormTitle("");
     setFormImageUrl("");
     setFormVideoUrl("");
+    setFormDescription("");
     setFormIsVideo(false);
     setFormDurationSec(10);
     setIsEditing(false);
@@ -269,7 +361,7 @@ export default function App() {
   const handleDeleteAd = async (id: string) => {
     try {
       if (firebaseActive && firestoreDbRef.current) {
-        const adDocRef = doc(firestoreDbRef.current, "ads", id);
+        const adDocRef = doc(firestoreDbRef.current, "active_ads", id);
         await deleteDoc(adDocRef);
         triggerNotification("success", "Anúncio excluído permanentemente do Firestore!");
       } else {
@@ -287,10 +379,10 @@ export default function App() {
   // Semear dados de demonstração no banco de dados Firestore real se solicitado
   const handleSeedFirestore = async () => {
     if (!firebaseActive || !firestoreDbRef.current) return;
-    if (confirm("Isso irá criar 4 anúncios de demonstração diretamente na sua coleção 'ads' do Firestore. Deseja prosseguir?")) {
+    if (confirm("Isso irá criar 4 anúncios de demonstração diretamente na sua coleção 'active_ads' do Firestore. Deseja prosseguir?")) {
       try {
         const batch = writeBatch(firestoreDbRef.current);
-        const adsCol = collection(firestoreDbRef.current, "ads");
+        const adsCol = collection(firestoreDbRef.current, "active_ads");
 
         for (const demoAd of INITIAL_DEMO_ADS) {
           const { id, ...adDataWithoutId } = demoAd;
@@ -319,12 +411,13 @@ data class Ad(
     val imageUrl: String = "",
     val videoUrl: String = "",
     val isVideo: Boolean = false,
-    val durationMillis: Long = 10000L
+    val durationMillis: Long = 10000L,
+    val description: String = ""
 )
 
 // Ouvinte em tempo real no app Android
 val db = Firebase.firestore
-db.collection("ads")
+db.collection("active_ads")
     .addSnapshotListener { snapshots, e ->
         if (e != null) {
             Log.w("AdAdmin", "Falha ao ouvir anúncios.", e)
@@ -339,7 +432,8 @@ db.collection("ads")
                 imageUrl = doc.getString("imageUrl") ?: "",
                 videoUrl = doc.getString("videoUrl") ?: "",
                 isVideo = doc.getBoolean("isVideo") ?: false,
-                durationMillis = doc.getLong("durationMillis") ?: 10000L
+                durationMillis = doc.getLong("durationMillis") ?: 10000L,
+                description = doc.getString("description") ?: ""
             )
             adsList.add(ad)
         }
@@ -368,6 +462,21 @@ db.collection("ads")
   const imageAdsCount = totalAds - videoAdsCount;
   const avgDurationMillis = totalAds > 0 ? Math.round(ads.reduce((acc, curr) => acc + curr.durationMillis, 0) / totalAds) : 0;
   const avgDurationSec = (avgDurationMillis / 1000).toFixed(1);
+
+  if (!user) {
+    return (
+      <LoginScreen
+        onLogin={handleLogin}
+        firebaseActive={firebaseActive}
+        connectionError={connectionError}
+        config={config}
+        onConnectFirebase={handleConnectFirebase}
+        isLoading={authLoading}
+        authError={authError}
+        setAuthError={setAuthError}
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#0b0f19] text-slate-100 flex flex-col font-sans">
@@ -406,6 +515,25 @@ db.collection("ads")
                 Gerencie e cadastre campanhas de anúncios em tempo real para seus dispositivos em trânsito.
               </p>
             </div>
+          </div>
+
+          {/* Usuário Autenticado e Botão de Sair */}
+          <div className="flex items-center gap-3.5">
+            <div className="text-right hidden sm:block">
+              <span className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Operador Autenticado</span>
+              <span className="block text-xs font-medium text-slate-300 font-mono">
+                {user.email}
+                {user.isDemo && <span className="text-[10px] text-amber-500 font-bold ml-1.5">(DEMO)</span>}
+              </span>
+            </div>
+            <button
+              onClick={handleLogout}
+              className="flex items-center gap-2 rounded-xl bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-red-400 py-2.5 px-4 text-xs font-semibold transition duration-150"
+              title="Encerrar Sessão"
+            >
+              <LogOut size={14} />
+              <span>Sair</span>
+            </button>
           </div>
         </div>
       </header>
@@ -516,6 +644,20 @@ db.collection("ads")
                       </a>
                     </div>
                   )}
+                </div>
+
+                {/* Descrição do Anúncio */}
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">
+                    Descrição / Observação do Anúncio
+                  </label>
+                  <textarea
+                    value={formDescription}
+                    onChange={(e) => setFormDescription(e.target.value)}
+                    placeholder="Ex: Campanha de desconto especial para exibição diurna nos tablets."
+                    rows={2}
+                    className="w-full rounded-xl bg-slate-950 border border-slate-800 focus:border-indigo-500 p-3 text-xs text-slate-200 focus:outline-none transition-colors resize-none"
+                  />
                 </div>
 
                 {/* Seleção se é Vídeo ou Imagem */}
