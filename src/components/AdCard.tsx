@@ -1,15 +1,27 @@
 import React, { useState } from "react";
 import { Ad } from "../types";
-import { Trash2, Edit2, Play, Image, Clock, ExternalLink } from "lucide-react";
+import { Trash2, Edit2, Play, Image, Clock, ExternalLink, ArrowUp, ArrowDown } from "lucide-react";
 
 interface AdCardProps {
   ad: Ad;
   onDelete: (id: string) => void | Promise<void>;
   onEdit: (ad: Ad) => void;
+  onMoveUp?: () => void;
+  onMoveDown?: () => void;
+  isFirst?: boolean;
+  isLast?: boolean;
   key?: string;
 }
 
-export default function AdCard({ ad, onDelete, onEdit }: AdCardProps): React.JSX.Element {
+export default function AdCard({ 
+  ad, 
+  onDelete, 
+  onEdit, 
+  onMoveUp, 
+  onMoveDown, 
+  isFirst = false, 
+  isLast = false 
+}: AdCardProps): React.JSX.Element {
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [imageError, setImageError] = useState(false);
 
@@ -80,6 +92,35 @@ export default function AdCard({ ad, onDelete, onEdit }: AdCardProps): React.JSX
 
         {/* Botões de Ação */}
         <div className="mt-auto pt-4 flex gap-2 border-t border-slate-800">
+          <div className="flex gap-1.5">
+            <button
+              type="button"
+              onClick={onMoveUp}
+              disabled={isFirst}
+              className={`flex items-center justify-center rounded-xl p-2.5 text-xs font-medium border transition-colors ${
+                isFirst 
+                  ? "bg-slate-950/10 border-slate-900 text-slate-700 cursor-not-allowed" 
+                  : "bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-300 hover:text-indigo-400"
+              }`}
+              title="Mover para Cima"
+            >
+              <ArrowUp size={14} />
+            </button>
+            <button
+              type="button"
+              onClick={onMoveDown}
+              disabled={isLast}
+              className={`flex items-center justify-center rounded-xl p-2.5 text-xs font-medium border transition-colors ${
+                isLast 
+                  ? "bg-slate-950/10 border-slate-900 text-slate-700 cursor-not-allowed" 
+                  : "bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-300 hover:text-indigo-400"
+              }`}
+              title="Mover para Baixo"
+            >
+              <ArrowDown size={14} />
+            </button>
+          </div>
+
           <button
             onClick={() => onEdit(ad)}
             className="flex-1 flex items-center justify-center gap-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 py-2.5 px-3 text-xs font-medium transition-colors"

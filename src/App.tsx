@@ -34,7 +34,8 @@ import {
   orderBy, 
   getDocs,
   writeBatch,
-  serverTimestamp
+  serverTimestamp,
+  setDoc
 } from "firebase/firestore";
 import { 
   signInWithEmailAndPassword, 
@@ -150,10 +151,9 @@ export default function App() {
         if (currentUser) {
           setUser(currentUser);
         } else {
-          // Se não houver usuário real logado, limpa do estado se for o caso
-          if (user && !user.isDemo) {
-            setUser(null);
-          }
+          // Quando o Firebase está ativo, precisamos de um usuário autenticado no Firebase real.
+          // Se não houver usuário logado no Firebase real, limpamos o estado para exigir login real.
+          setUser(null);
         }
       });
 
@@ -178,8 +178,8 @@ export default function App() {
             };
           });
 
-          // Ordenar localmente por ID ou título como fallback
-          fetchedAds.sort((a, b) => b.title.localeCompare(a.title));
+          // Ordenar localmente por ID (que reflete a ordem real no tablet)
+          fetchedAds.sort((a, b) => (a.id || "").localeCompare(b.id || ""));
 
           setAds(fetchedAds);
           setFirebaseActive(true);
@@ -292,7 +292,9 @@ export default function App() {
           await updateDoc(adDocRef, adData);
           triggerNotification("success", "Anúncio atualizado com sucesso no Firestore!");
         } else {
-          await addDoc(adsCol, {
+          const newId = getNextAdId();
+          const adDocRef = doc(firestoreDbRef.current, "active_ads", newId);
+          await setDoc(adDocRef, {
             ...adData,
             createdAt: serverTimestamp()
           });
@@ -307,12 +309,13 @@ export default function App() {
           );
           triggerNotification("success", "Anúncio atualizado localmente (Modo Demo).");
         } else {
+          const newId = getNextAdId();
           const newDemoAd: Ad = {
-            id: `demo-${Date.now()}`,
+            id: newId,
             ...adData,
             createdAt: Date.now()
           };
-          updatedList = [newDemoAd, ...updatedList];
+          updatedList = [...updatedList, newDemoAd];
           triggerNotification("success", "Novo anúncio cadastrado localmente (Modo Demo).");
         }
         setAds(updatedList);
@@ -399,6 +402,108 @@ export default function App() {
         console.error("Erro ao semear banco de dados:", e);
         triggerNotification("error", `Erro ao semear banco: ${e.message}`);
       }
+    }
+  };
+
+  // Obter próximo ID ordenável para o Firestore
+  const getNextAdId = () => {
+    let maxSeq = -1;
+    ads.forEach((ad) => {
+      if (ad.id && ad.id.startsWith("seq_")) {
+        const parts = ad.id.split("_");
+        const seq = parseInt(parts[1], 10);
+        if (!isNaN(seq) && seq > maxSeq) {
+          maxSeq = seq;
+        }
+      }
+    });
+    const nextSeq = maxSeq + 1;
+    const randomSuffix = Math.random().toString(36).substring(2, 8);
+    return `seq_${String(nextSeq).padStart(4, "0")}_${randomSuffix}`;
+  };
+
+  // Mover anúncio para cima ou para baixo (reordenação visual)
+  const handleMoveAd = async (index: number, direction: "up" | "down") => {
+    const targetIndex = direction === "up" ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= ads.length) return;
+
+    const adA = ads[index];
+    const adB = ads[targetIndex];
+
+    try {
+      if (firebaseActive && firestoreDbRef.current) {
+        const batch = writeBatch(firestoreDbRef.current);
+        const docARef = doc(firestoreDbRef.current, "active_ads", adA.id!);
+        const docBRef = doc(firestoreDbRef.current, "active_ads", adB.id!);
+
+        // Swap de dados: o documento A recebe os dados do anúncio B, e o B recebe os dados de A
+        const { id: idA, createdAt: caA, ...dataA } = adA;
+        const { id: idB, createdAt: caB, ...dataB } = adB;
+
+        batch.set(docARef, { ...dataB, createdAt: caA || serverTimestamp() });
+        batch.set(docBRef, { ...dataA, createdAt: caB || serverTimestamp() });
+
+        await batch.commit();
+        triggerNotification("success", "Ordem atualizada com sucesso no Firestore!");
+      } else {
+        // Modo Demo Local (Salvar no LocalStorage)
+        const updatedList = [...ads];
+        updatedList[index] = adB;
+        updatedList[targetIndex] = adA;
+        setAds(updatedList);
+        localStorage.setItem("local_demo_ads", JSON.stringify(updatedList));
+        triggerNotification("success", "Ordem atualizada localmente.");
+      }
+    } catch (err: any) {
+      console.error("Erro ao reordenar anúncio:", err);
+      triggerNotification("error", `Erro ao reordenar anúncio: ${err.message}`);
+    }
+  };
+
+  // Padronizar e sequenciar os IDs de todos os anúncios existentes para garantir ordenação perfeita
+  const handleStandardizeIds = async () => {
+    if (ads.length === 0) return;
+    if (!confirm("Isso irá reorganizar e padronizar os IDs de todos os anúncios no Firestore para garantir uma ordenação perfeita e sequencial. Deseja continuar?")) {
+      return;
+    }
+
+    try {
+      if (firebaseActive && firestoreDbRef.current) {
+        const batch = writeBatch(firestoreDbRef.current);
+        
+        // Para cada anúncio, vamos criar um novo com ID seq_XXXX_ e deletar o antigo se for diferente
+        ads.forEach((ad, index) => {
+          const newSeqId = `seq_${String(index).padStart(4, "0")}_${Math.random().toString(36).substring(2, 8)}`;
+          
+          const oldDocRef = doc(firestoreDbRef.current, "active_ads", ad.id!);
+          const newDocRef = doc(firestoreDbRef.current, "active_ads", newSeqId);
+          
+          const { id, ...adData } = ad;
+          batch.set(newDocRef, {
+            ...adData,
+            createdAt: ad.createdAt || serverTimestamp()
+          });
+          
+          if (ad.id !== newSeqId) {
+            batch.delete(oldDocRef);
+          }
+        });
+
+        await batch.commit();
+        triggerNotification("success", "IDs padronizados e ordenados com sucesso no Firestore!");
+      } else {
+        // No modo demo, apenas geramos IDs novos
+        const updatedList = ads.map((ad, index) => ({
+          ...ad,
+          id: `seq_${String(index).padStart(4, "0")}_${Math.random().toString(36).substring(2, 8)}`
+        }));
+        setAds(updatedList);
+        localStorage.setItem("local_demo_ads", JSON.stringify(updatedList));
+        triggerNotification("success", "IDs padronizados localmente.");
+      }
+    } catch (err: any) {
+      console.error("Erro ao padronizar IDs:", err);
+      triggerNotification("error", `Erro ao padronizar IDs: ${err.message}`);
     }
   };
 
@@ -752,15 +857,26 @@ db.collection("active_ads")
                   <p className="text-xs text-slate-400">Anúncios transmitidos em tempo real para os dispositivos embarcados.</p>
                 </div>
 
-                {/* Semeador de testes no Firestore real */}
-                {firebaseActive && ads.length === 0 && (
-                  <button
-                    onClick={handleSeedFirestore}
-                    className="text-xs font-medium px-3 py-1.5 rounded-lg border border-indigo-500/40 hover:border-indigo-500 bg-indigo-950/20 text-indigo-300 hover:text-white transition shrink-0"
-                  >
-                    Semear Banco de Testes
-                  </button>
-                )}
+                {/* Semeador e organizador */}
+                <div className="flex gap-2">
+                  {firebaseActive && ads.length === 0 && (
+                    <button
+                      onClick={handleSeedFirestore}
+                      className="text-xs font-medium px-3 py-1.5 rounded-lg border border-indigo-500/40 hover:border-indigo-500 bg-indigo-950/20 text-indigo-300 hover:text-white transition shrink-0"
+                    >
+                      Semear Banco de Testes
+                    </button>
+                  )}
+                  {ads.length > 0 && (
+                    <button
+                      onClick={handleStandardizeIds}
+                      className="text-xs font-medium px-3.5 py-2 rounded-xl border border-indigo-500/30 hover:border-indigo-500/60 bg-indigo-950/20 text-indigo-300 hover:text-white transition shrink-0 flex items-center gap-1.5"
+                      title="Organizar e padronizar os IDs no banco para uma ordenação perfeita no tablet"
+                    >
+                      <span className="text-xs">🔄 Padronizar Ordem</span>
+                    </button>
+                  )}
+                </div>
               </div>
 
               {/* Filtros e Busca */}
@@ -811,14 +927,21 @@ db.collection("active_ads")
               {/* Lista em Grid de Cards */}
               {filteredAds.length > 0 ? (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {filteredAds.map((ad) => (
-                    <AdCard 
-                      key={ad.id} 
-                      ad={ad} 
-                      onDelete={handleDeleteAd} 
-                      onEdit={handleEditSelect} 
-                    />
-                  ))}
+                  {filteredAds.map((ad) => {
+                    const originalIndex = ads.findIndex((item) => item.id === ad.id);
+                    return (
+                      <AdCard 
+                        key={ad.id} 
+                        ad={ad} 
+                        onDelete={handleDeleteAd} 
+                        onEdit={handleEditSelect} 
+                        onMoveUp={() => handleMoveAd(originalIndex, "up")}
+                        onMoveDown={() => handleMoveAd(originalIndex, "down")}
+                        isFirst={originalIndex === 0}
+                        isLast={originalIndex === ads.length - 1}
+                      />
+                    );
+                  })}
                 </div>
               ) : (
                 <div className="flex flex-col items-center justify-center text-center py-12 px-4 rounded-2xl bg-slate-950/40 border border-dashed border-slate-800">
