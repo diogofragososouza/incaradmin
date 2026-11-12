@@ -741,6 +741,13 @@ db.collection("active_ads")
                     className="w-full rounded-xl bg-slate-950 border border-slate-800 focus:border-indigo-500 p-3 text-xs text-slate-200 focus:outline-none transition-colors font-mono"
                     required
                   />
+                  <div className="mt-2 rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-[10px] leading-relaxed text-slate-400">
+                    <p className="mb-1 font-semibold text-slate-300">Especificações recomendadas para a imagem</p>
+                    <p><span className="text-slate-300">Proporção:</span> 16:9 (horizontal). <span className="text-slate-300">Resolução ideal:</span> 1920 × 1080 px.</p>
+                    <p><span className="text-slate-300">Resolução aceita:</span> de 1280 × 720 px até 2560 × 1440 px.</p>
+                    <p><span className="text-slate-300">Formatos:</span> WebP (recomendado), JPG/JPEG ou PNG.</p>
+                    <p><span className="text-slate-300">Peso ideal:</span> 200–600 KB. <span className="text-slate-300">Limite recomendado:</span> 1,5 MB (máximo de 2 MB).</p>
+                  </div>
                   {formImageUrl && (
                     <div className="mt-2 text-[10px] text-slate-400 flex items-center gap-2 bg-slate-950/40 p-1.5 rounded border border-slate-800">
                       <span className="truncate">Preview da mídia:</span>
