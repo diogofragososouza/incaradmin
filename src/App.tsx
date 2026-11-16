@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, FormEvent } from "react";
-import { Ad, FirebaseConfig } from "./types";
+import { Ad, AdScreen, FirebaseConfig } from "./types";
 import { INITIAL_DEMO_ADS } from "./data";
 import { initializeFirebase } from "./lib/firebase";
 import AdCard from "./components/AdCard";
+import AdScreensPanel from "./components/AdScreensPanel";
 import ConfigPanel from "./components/ConfigPanel";
 import MetricCard from "./components/MetricCard";
 import LoginScreen from "./components/LoginScreen";
@@ -20,11 +21,13 @@ import {
   Clock, 
   FolderOpen,
   MonitorPlay,
+  Tablet,
   Settings,
   LogOut
 } from "lucide-react";
 import { 
   collection, 
+  Timestamp,
   onSnapshot, 
   addDoc, 
   updateDoc, 
@@ -43,6 +46,8 @@ import {
   onAuthStateChanged 
 } from "firebase/auth";
 
+const DEVICE_ONLINE_TIMEOUT_MS = 6 * 60 * 1000;
+
 export default function App() {
   // Configuração e Conexão Firebase
   const [config, setConfig] = useState<FirebaseConfig | null>(null);
@@ -58,6 +63,10 @@ export default function App() {
 
   // Lista de Anúncios e Filtros
   const [ads, setAds] = useState<Ad[]>([]);
+  const [adScreens, setAdScreens] = useState<AdScreen[]>([]);
+  const [adScreensLoading, setAdScreensLoading] = useState(false);
+  const [adScreensError, setAdScreensError] = useState<string | null>(null);
+  const [deviceStatusTime, setDeviceStatusTime] = useState(Date.now());
   const [searchQuery, setSearchQuery] = useState("");
   const [filterType, setFilterType] = useState<"all" | "image" | "video">("all");
 
@@ -75,6 +84,85 @@ export default function App() {
   const [showAndroidGuide, setShowAndroidGuide] = useState(false);
   const [showNotification, setShowNotification] = useState<{ type: "success" | "error"; message: string } | null>(null);
   const [copiedCode, setCopiedCode] = useState(false);
+
+  useEffect(() => {
+    const timerId = window.setInterval(() => setDeviceStatusTime(Date.now()), 30_000);
+    return () => window.clearInterval(timerId);
+  }, []);
+
+  useEffect(() => {
+    const db = firestoreDbRef.current;
+    if (!firebaseActive || !user || user.isDemo || !db) {
+      setAdScreens([]);
+      setAdScreensError(null);
+      setAdScreensLoading(false);
+      return;
+    }
+
+    setAdScreensLoading(true);
+    setAdScreensError(null);
+
+    const unsubscribe = onSnapshot(
+      collection(db, "ad_screens"),
+      (snapshot) => {
+        const fetchedScreens: AdScreen[] = snapshot.docs.map((screenDoc) => {
+          const data = screenDoc.data();
+          const location = data.location;
+
+          return {
+            id: screenDoc.id,
+            deviceId: typeof data.deviceId === "string" ? data.deviceId : screenDoc.id,
+            isForeground: data.isForeground === true,
+            lastSeenAt: data.lastSeenAt instanceof Timestamp ? data.lastSeenAt : null,
+            registeredAt: data.registeredAt instanceof Timestamp ? data.registeredAt : null,
+            appVersion: typeof data.appVersion === "string" ? data.appVersion : undefined,
+            androidVersion: typeof data.androidVersion === "string" ? data.androidVersion : undefined,
+            deviceModel: typeof data.deviceModel === "string" ? data.deviceModel : undefined,
+            currentAdId: typeof data.currentAdId === "string" ? data.currentAdId : null,
+            location:
+              location &&
+              typeof location.latitude === "number" &&
+              Number.isFinite(location.latitude) &&
+              location.latitude >= -90 &&
+              location.latitude <= 90 &&
+              typeof location.longitude === "number" &&
+              Number.isFinite(location.longitude) &&
+              location.longitude >= -180 &&
+              location.longitude <= 180
+                ? {
+                    latitude: location.latitude,
+                    longitude: location.longitude,
+                    accuracyMeters:
+                      typeof location.accuracyMeters === "number" &&
+                      Number.isFinite(location.accuracyMeters)
+                        ? location.accuracyMeters
+                        : undefined,
+                    updatedAt:
+                      location.updatedAt instanceof Timestamp ? location.updatedAt : null,
+                  }
+                : null,
+          };
+        });
+
+        fetchedScreens.sort(
+          (a, b) => (b.lastSeenAt?.toMillis() ?? 0) - (a.lastSeenAt?.toMillis() ?? 0)
+        );
+        setAdScreens(fetchedScreens);
+        setAdScreensLoading(false);
+      },
+      (error) => {
+        console.error("Erro ao ouvir a coleção 'ad_screens':", error);
+        setAdScreensError(
+          error.code === "permission-denied"
+            ? "A leitura foi negada pelas regras do Firestore. Autorize esta conta administrativa a ler ad_screens."
+            : `Erro ao carregar dispositivos: ${error.message}`
+        );
+        setAdScreensLoading(false);
+      }
+    );
+
+    return unsubscribe;
+  }, [firebaseActive, user]);
 
   // 1. Carregar Configuração Salva e Inicializar Modo Adequado
   useEffect(() => {
@@ -567,6 +655,11 @@ db.collection("active_ads")
   const imageAdsCount = totalAds - videoAdsCount;
   const avgDurationMillis = totalAds > 0 ? Math.round(ads.reduce((acc, curr) => acc + curr.durationMillis, 0) / totalAds) : 0;
   const avgDurationSec = (avgDurationMillis / 1000).toFixed(1);
+  const onlineAdScreens = adScreens.filter((screen) => {
+    if (!screen.isForeground || !screen.lastSeenAt) return false;
+    const ageMs = deviceStatusTime - screen.lastSeenAt.toMillis();
+    return ageMs >= -60_000 && ageMs <= DEVICE_ONLINE_TIMEOUT_MS;
+  });
 
   if (!user) {
     return (
@@ -660,7 +753,7 @@ db.collection("active_ads")
           </div>
 
           {/* Card 2: Analytics & Metrics Banner */}
-          <div className="lg:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="lg:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-4">
             <MetricCard 
               title="Total de Anúncios" 
               value={totalAds} 
@@ -682,9 +775,29 @@ db.collection("active_ads")
               description="Ideal para tráfego urbano"
               colorClass="from-amber-600/20 to-orange-600/20 text-amber-400"
             />
+            <MetricCard
+              title="Telas Online"
+              value={onlineAdScreens.length}
+              icon={<Tablet className="text-cyan-400" size={18} />}
+              description={
+                firebaseActive && !user?.isDemo
+                  ? `De ${adScreens.length} telas cadastradas`
+                  : "Conecte o Firestore para acompanhar"
+              }
+              colorClass="from-cyan-600/20 to-sky-600/20 text-cyan-400"
+            />
           </div>
 
         </div>
+
+        <AdScreensPanel
+          screens={adScreens}
+          onlineScreens={onlineAdScreens}
+          isFirebaseActive={firebaseActive}
+          isDemoUser={!!user?.isDemo}
+          isLoading={adScreensLoading}
+          error={adScreensError}
+        />
 
         {/* Middle Segment: Form side-by-side with Ad List */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
