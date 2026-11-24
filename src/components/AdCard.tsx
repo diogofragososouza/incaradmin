@@ -35,7 +35,7 @@ export default function AdCard({
         {!imageError ? (
           <img
             src={ad.imageUrl || "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop"}
-            alt={ad.title}
+            alt={ad.title || "Anúncio"}
             className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
             onError={() => setImageError(true)}
             referrerPolicy="no-referrer"
@@ -70,9 +70,11 @@ export default function AdCard({
 
       {/* Detalhes do Anúncio */}
       <div className="flex flex-1 flex-col p-5">
-        <h4 className="font-semibold text-white text-base leading-snug line-clamp-2 min-h-[3rem] mb-2">
-          {ad.title}
-        </h4>
+        {ad.title && (
+          <h4 className="font-semibold text-white text-base leading-snug line-clamp-2 min-h-[3rem] mb-2">
+            {ad.title}
+          </h4>
+        )}
 
         {ad.description && (
           <p className="text-xs text-slate-400 line-clamp-2 mb-3 bg-slate-950/20 p-2 rounded border border-slate-800/40">

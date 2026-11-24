@@ -2,7 +2,7 @@ import type { Timestamp } from "firebase/firestore";
 
 export interface Ad {
   id?: string;
-  title: string;
+  title?: string;
   imageUrl: string;
   videoUrl: string;
   isVideo: boolean;

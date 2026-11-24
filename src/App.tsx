@@ -350,11 +350,6 @@ export default function App() {
   // 3. Salvar Anúncio (Criar ou Atualizar)
   const handleSaveAd = async (e: FormEvent) => {
     e.preventDefault();
-
-    if (!formTitle.trim()) {
-      triggerNotification("error", "O título do anúncio é obrigatório.");
-      return;
-    }
     if (!formImageUrl.trim()) {
       triggerNotification("error", "A URL da imagem é obrigatória.");
       return;
@@ -421,7 +416,7 @@ export default function App() {
   // Editar Anúncio
   const handleEditSelect = (ad: Ad) => {
     setFormId(ad.id);
-    setFormTitle(ad.title);
+    setFormTitle(ad.title || "");
     setFormImageUrl(ad.imageUrl);
     setFormVideoUrl(ad.videoUrl || "");
     setFormDescription(ad.description || "");
@@ -642,7 +637,7 @@ db.collection("active_ads")
 
   // Filtrar anúncios para exibição
   const filteredAds = ads.filter((ad) => {
-    const matchesSearch = ad.title.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesSearch = (ad.title || "").toLowerCase().includes(searchQuery.toLowerCase());
     if (filterType === "all") return matchesSearch;
     if (filterType === "video") return matchesSearch && ad.isVideo;
     if (filterType === "image") return matchesSearch && !ad.isVideo;
@@ -829,7 +824,7 @@ db.collection("active_ads")
                 {/* Título do Anúncio */}
                 <div>
                   <label className="block text-xs font-semibold text-slate-400 mb-1.5">
-                    Título do Anúncio <span className="text-red-400">*</span>
+                    Título do Anúncio <span className="text-slate-500">(opcional)</span>
                   </label>
                   <input
                     type="text"
@@ -837,7 +832,6 @@ db.collection("active_ads")
                     onChange={(e) => setFormTitle(e.target.value)}
                     placeholder="Ex: Rodízio de Pizza Bella Itália"
                     className="w-full rounded-xl bg-slate-950 border border-slate-800 focus:border-indigo-500 p-3 text-xs text-slate-200 focus:outline-none transition-colors"
-                    required
                   />
                 </div>
 
